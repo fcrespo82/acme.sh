@@ -28,34 +28,23 @@ dns_registrobr_add() {
   if [ -z "$REGISTROBR_User" ] || [ -z "$REGISTROBR_Password" ]; then
     REGISTROBR_User=""
     REGISTROBR_Password=""
-    if [ -z "$FREEDNS_COOKIE" ]; then
-      _err "You did not specify the Registro.br username and password yet."
-      _err "Please export as REGISTROBR_User / REGISTROBR_Password and try again."
-      return 1
-    fi
-    using_cached_cookies="true"
-  else
-    FREEDNS_COOKIE="$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
-    if [ -z "$FREEDNS_COOKIE" ]; then
-      return 1
-    fi
-    using_cached_cookies="false"
+    _err "You must export variables: REGISTROBR_User and REGISTROBR_Password"
   fi
+    # FREEDNS_COOKIE="$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
 
-  _debug "Registro.br login cookies: $FREEDNS_COOKIE (cached = $using_cached_cookies)"
+  # _debug "Registro.br login cookies: $FREEDNS_COOKIE (cached = $using_cached_cookies)"
 
-  _saveaccountconf FREEDNS_COOKIE "$FREEDNS_COOKIE"
+  _saveaccountconf REGISTROBR_User "$REGISTROBR_User"
+  _saveaccountconf REGISTROBR_Password "$REGISTROBR_Password"
 
   # split our full domain name into two parts...
-  i="$(echo "$fulldomain" | tr '.' ' ' | wc -w)"
-  i="$(_math "$i" - 1)"
-  top_domain="$(echo "$fulldomain" | cut -d. -f "$i"-100)"
-  i="$(_math "$i" - 1)"
-  sub_domain="$(echo "$fulldomain" | cut -d. -f -"$i")"
 
-  _debug "top_domain: $top_domain"
+  sub_domain="$(echo "$fulldomain" | cut -d. -f -1)"
+
+  _debug "fulldomain: $fulldomain"
   _debug "sub_domain: $sub_domain"
 
+  LOGIN = "$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
   # Sometimes Registro.br does not return the subdomain page but rather
   # returns a page regarding becoming a premium member.  This usually
   # happens after a period of inactivity.  Immediately trying again
@@ -221,11 +210,22 @@ _registrobr_login() {
   export _H1="Accept-Language:en-US"
   username="$1"
   password="$2"
+
+  url_token="https://registro.br/2/login"
+  htmlpage_token="$(_get "$url_token")"
+
+  token_line = "$(_egrep_o 'id="request-token".*value="(.*)".*>')"
+  token = "$(_egrep_o 'value=".*" ' | cut -d ' ' -f 1 | cut -d '=' -f 2 | tr -d '"')"
+
+  _debug "TOKEN $token"
+
   url="https://registro.br/ajax/login"
 
   _debug "Login to Registro.br as user $username"
 
-  htmlpage="$(_post "user=$(printf '%s' "$username" | _url_encode)&password=$(printf '%s' "$password" | _url_encode)" "$url")"
+  data="{\"user\":\"$REGISTROBR_User\", \"password\":\"$REGISTROBR_Password\"}"
+
+  htmlpage="$(_post "$data" "$url")"
 
   if [ "$?" != "0" ]; then
     _err "Registro.br login failed for user $username bad RC from _post"
