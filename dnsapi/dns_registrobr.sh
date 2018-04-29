@@ -30,9 +30,11 @@ dns_registrobr_add() {
     REGISTROBR_Password=""
     _err "You must export variables: REGISTROBR_User and REGISTROBR_Password"
   fi
-    # FREEDNS_COOKIE="$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
+  
+  login_result="$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
 
-  # _debug "Registro.br login cookies: $FREEDNS_COOKIE (cached = $using_cached_cookies)"
+  _debug "COOKIE1" $COOKIE1
+  _debug "COOKIE2" $COOKIE2
 
   _saveaccountconf REGISTROBR_User "$REGISTROBR_User"
   _saveaccountconf REGISTROBR_Password "$REGISTROBR_Password"
@@ -45,69 +47,8 @@ dns_registrobr_add() {
   _debug "sub_domain: $sub_domain"
 
   LOGIN = "$(_registrobr_login "$REGISTROBR_User" "$REGISTROBR_Password")"
-  # Sometimes Registro.br does not return the subdomain page but rather
-  # returns a page regarding becoming a premium member.  This usually
-  # happens after a period of inactivity.  Immediately trying again
-  # returns the correct subdomain page.  So, we will try twice to
-  # load the page and obtain our domain ID
-  attempts=2
-  while [ "$attempts" -gt "0" ]; do
-    attempts="$(_math "$attempts" - 1)"
+  
 
-    htmlpage="$(_freedns_retrieve_subdomain_page "$FREEDNS_COOKIE")"
-    if [ "$?" != "0" ]; then
-      if [ "$using_cached_cookies" = "true" ]; then
-        _err "Has your Registro.br username and password changed?  If so..."
-        _err "Please export as REGISTROBR_User / REGISTROBR_Password and try again."
-      fi
-      return 1
-    fi
-
-    subdomain_csv="$(echo "$htmlpage" | tr -d "\n\r" | _egrep_o '<form .*</form>' | sed 's/<tr>/@<tr>/g' | tr '@' '\n' | grep edit.php | grep "$top_domain")"
-    _debug3 "subdomain_csv: $subdomain_csv"
-
-    # The above beauty ends with striping out rows that do not have an
-    # href to edit.php and do not have the top domain we are looking for.
-    # So all we should be left with is CSV of table of subdomains we are
-    # interested in.
-
-    # Now we have to read through this table and extract the data we need
-    lines="$(echo "$subdomain_csv" | wc -l)"
-    i=0
-    found=0
-    DNSdomainid=""
-    while [ "$i" -lt "$lines" ]; do
-      i="$(_math "$i" + 1)"
-      line="$(echo "$subdomain_csv" | sed -n "${i}p")"
-      _debug2 "line: $line"
-      if [ $found = 0 ] && _contains "$line" "<td>$top_domain</td>"; then
-        # this line will contain DNSdomainid for the top_domain
-        DNSdomainid="$(echo "$line" | _egrep_o "edit_domain_id *= *.*>" | cut -d = -f 2 | cut -d '>' -f 1)"
-        _debug2 "DNSdomainid: $DNSdomainid"
-        found=1
-        break
-      fi
-    done
-
-    if [ -z "$DNSdomainid" ]; then
-      # If domain ID is empty then something went wrong (top level
-      # domain not found at Registro.br).
-      if [ "$attempts" = "0" ]; then
-        # exhausted maximum retry attempts
-        _err "Domain $top_domain not found at Registro.br"
-        return 1
-      fi
-    else
-      # break out of the 'retry' loop... we have found our domain ID
-      break
-    fi
-    _info "Domain $top_domain not found at Registro.br"
-    _info "Retry loading subdomain page ($attempts attempts remaining)"
-  done
-
-  # Add in new TXT record with the value provided
-  _debug "Adding TXT record for $fulldomain, $txtvalue"
-  _freedns_add_txt_record "$FREEDNS_COOKIE" "$DNSdomainid" "$sub_domain" "$txtvalue"
   return $?
 }
 
@@ -207,17 +148,22 @@ dns_registrobr_rm() {
 # print string "cookie=value" etc.
 # returns 0 success
 _registrobr_login() {
+  _debug "Trying to login"
   export _H1="Accept-Language:en-US"
   username="$1"
   password="$2"
 
   url_token="https://registro.br/2/login"
-  htmlpage_token="$(_get "$url_token")"
+  token_response="$(_get "$url_token")"
 
-  token_line = "$(_egrep_o 'id="request-token".*value="(.*)".*>')"
-  token = "$(_egrep_o 'value=".*" ' | cut -d ' ' -f 1 | cut -d '=' -f 2 | tr -d '"')"
+  _debug2 token_response "$token_response"
 
-  _debug "TOKEN $token"
+  token_line="$(echo "$token_response" | _egrep_o 'id="request-token".*value="(.*)".*>')"
+  token="$(echo "$token_line" | _egrep_o 'value=".*" ' | cut -d ' ' -f 1 | cut -d '=' -f 2 | tr -d '"')"
+
+  _debug token "$token"
+
+  _H1="Request-Token: $token"
 
   url="https://registro.br/ajax/login"
 
@@ -225,14 +171,24 @@ _registrobr_login() {
 
   data="{\"user\":\"$REGISTROBR_User\", \"password\":\"$REGISTROBR_Password\"}"
 
-  htmlpage="$(_post "$data" "$url")"
+  login_response="$(_post "$data" "$url")"
 
   if [ "$?" != "0" ]; then
     _err "Registro.br login failed for user $username bad RC from _post"
     return 1
   fi
 
-  cookies="$(grep -i '^Set-Cookie.*dns_cookie.*$' "$HTTP_HEADER" | _head_n 1 | tr -d "\r\n" | cut -d " " -f 2)"
+  _debug login_response "$login_response"
+
+  cookies="$(egrep -i '^Set-Cookie.*$' "$HTTP_HEADER")"
+  cookie1="$(echo "$cookies" | _head_n 1 | _egrep_o "stkey.*$")"
+  cookie2="$(echo "$cookies" | _tail_n 1 | _egrep_o "aihandle.*$")"
+
+  _debug cookie1 "$cookie1"
+  _debug cookie2 "$cookie2"
+
+  export COOKIE1="$cookie1"
+  export COOKIE2="$cookie2"
 
   # if cookies is not empty then logon successful
   if [ -z "$cookies" ]; then
@@ -241,7 +197,6 @@ _registrobr_login() {
     return 1
   fi
 
-  printf "%s" "$cookies"
   return 0
 }
 
